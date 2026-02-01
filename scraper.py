@@ -1,31 +1,65 @@
-import numpy as np
-from shapely.geometry import LineString
+import os
+import json
+import requests
+import gspread
+from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
 
-def get_points_every_300m(addr):
-    try:
-        # 1. Get the road graph
-        query = f"{addr}, South Australia"
-        graph = ox.graph_from_address(query, dist=1000, network_type='drive')
-        
-        # 2. Project to a metric CRS (UTM) to measure in meters
-        graph_proj = ox.project_graph(graph)
-        edges = ox.graph_to_gdfs(graph_proj, nodes=False)
-        
-        # 3. Merge segments and calculate length
-        combined_line = edges.union_all()
-        total_length = combined_line.length  # Now in meters
-        
-        # 4. Generate points every 300m
-        distances = np.arange(0, total_length, 300)
-        points = [combined_line.interpolate(d) for d in distances]
-        
-        # 5. Convert back to Lat/Lon (WGS84) for Google Maps
-        # We create a temporary GeoSeries to handle the re-projection back
-        import geopandas as gpd
-        points_gdf = gpd.GeoSeries(points, crs=edges.crs).to_crs("EPSG:4326")
-        
-        # Return as a MultiPoint WKT string
-        return points_gdf.union_all().wkt
-    except Exception as e:
-        print(f"Error on {addr}: {e}")
-        return None
+def get_next_wednesday():
+    # Returns the date for the coming Wednesday
+    today = datetime.now()
+    days_ahead = (2 - today.weekday()) % 7 # 2 is Wednesday
+    if days_ahead == 0: days_ahead = 7
+    return (today + timedelta(days=days_ahead)).strftime('%d/%m/%Y')
+
+def scrape_sapol_metro():
+    url = "https://www.police.sa.gov.au/your-safety/road-safety/traffic-camera-locations/mobile-camera-container"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    found_data = []
+    current_date = get_next_wednesday()
+
+    # 1. Find the "Metropolitan" section
+    metro_header = soup.find(lambda tag: tag.name == "h3" and "Metropolitan" in tag.text)
+    
+    if metro_header:
+        # 2. Look for the Wednesday block following that header
+        # We search siblings until we hit another major section
+        current_node = metro_header.find_next_sibling()
+        while current_node and current_node.name != "h2":
+            if "Wednesday" in current_node.text:
+                # The text usually follows in the next <p> tag
+                locations_node = current_node.find_next_sibling("p")
+                if locations_node:
+                    # Clean the string (it's often one big blob with dots or newlines)
+                    raw_text = locations_node.get_text().replace('.', '\n')
+                    for line in raw_text.split('\n'):
+                        if ',' in line:
+                            parts = line.split(',')
+                            street = parts[0].strip().upper()
+                            suburb = parts[1].strip().upper()
+                            found_data.append(["Wednesday", current_date, street, suburb])
+            current_node = current_node.find_next_sibling()
+            
+    return found_data
+
+# --- MAIN RUN ---
+data = scrape_sapol_metro()
+
+if data:
+    # Connect to Sheets
+    creds = json.loads(os.environ['GOOGLE_CREDS'])
+    gc = gspread.service_account_from_dict(creds)
+    sh = gc.open_by_key(os.environ['SHEET_ID'])
+    worksheet = sh.get_worksheet(0)
+    
+    # Update Sheet with headers
+    worksheet.clear()
+    headers = [["Day", "Date", "Street Name", "Suburb"]]
+    worksheet.update(headers, "A1")
+    worksheet.append_rows(data)
+    print(f"Success! Uploaded {len(data)} Metropolitan cameras.")
+else:
+    print("Scraper failed to find Wednesday Metropolitan data. Check the website HTML.")
