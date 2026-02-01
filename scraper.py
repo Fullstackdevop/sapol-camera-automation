@@ -1,3 +1,9 @@
+import os
+import json
+import requests
+import gspread
+from bs4 import BeautifulSoup
+
 def scrape_sapol_full_week():
     url = "https://www.police.sa.gov.au/your-safety/road-safety/traffic-camera-locations/mobile-camera-container"
     
@@ -23,3 +29,30 @@ def scrape_sapol_full_week():
     except Exception as e:
         print(f"Network Error: {e}")
         return []
+        # --- GOOGLE SHEETS UPLOAD ---
+if __name__ == "__main__":
+    data = scrape_sapol_full_week()
+
+    if data:
+        print(f"Found {len(data)} Metropolitan entries. Connecting to Google Sheets...")
+        
+        # Load Credentials from GitHub Secrets
+        creds_json = os.environ.get('GOOGLE_CREDS')
+        sheet_id = os.environ.get('SHEET_ID')
+        
+        if not creds_json or not sheet_id:
+            print("Error: Missing GOOGLE_CREDS or SHEET_ID secrets.")
+        else:
+            creds = json.loads(creds_json)
+            gc = gspread.service_account_from_dict(creds)
+            sh = gc.open_by_key(sheet_id)
+            worksheet = sh.get_worksheet(0)
+            
+            # Clear and Update
+            worksheet.clear()
+            headers = [["Day/Date", "Street Name", "Suburb"]]
+            worksheet.update(values=headers, range_name="A1")
+            worksheet.append_rows(data)
+            print("Successfully updated Google Sheet!")
+    else:
+        print("Scraper finished but no data was found.")
