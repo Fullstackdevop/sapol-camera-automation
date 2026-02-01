@@ -5,7 +5,7 @@ import gspread
 from bs4 import BeautifulSoup
 
 def scrape_sapol_full_week():
-    url = "https://www.police.sa.gov.au/your-safety/road-safety/traffic-camera-locations/mobile-camera-container"
+    url = "https://www.police.sa.gov.au/your-safety/road-safety/traffic-camera-locations"
     
     # This header mimics a standard Windows Chrome browser
     headers = {
